@@ -18,6 +18,10 @@ npm run build      # typkontroll + produktionsbygge till dist/
 npm run preview    # serva produktionsbygget lokalt
 ```
 
+## Publicering (GitHub Pages)
+
+Workflowen `.github/workflows/deploy.yml` bygger och publicerar appen vid varje push till `main` (och kan köras manuellt under *Actions*). Engångsinställning: **Settings → Pages → Source: GitHub Actions**. Appen hamnar på `https://<användare>.github.io/wh-breathing/`.
+
 ## Så fungerar ett pass
 
 1. **Gör dig redo** – 3 sekunders nedräkning.
