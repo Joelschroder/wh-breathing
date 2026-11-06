@@ -42,14 +42,25 @@ export class AudioEngine {
   /** Måste anropas från en användarinteraktion (klick) p.g.a. autoplay-regler. */
   async init() {
     this.generation++;
+    // Måste ske synkront i klicket, före första await.
+    unlockIOSPlayback();
     if (this.ctx) {
-      if (this.ctx.state === 'suspended') await this.ctx.resume();
+      if (this.ctx.state !== 'running') await this.ctx.resume().catch(() => {});
       return;
     }
     const Ctx: typeof AudioContext =
       window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     const ctx = new Ctx();
     this.ctx = ctx;
+
+    // iOS kan pausa ljudet (t.ex. vid samtal eller när appen göms) – återuppta då.
+    const resumeIfActive = () => {
+      if (document.visibilityState === 'visible' && this.background !== 'none' && ctx.state !== 'running') {
+        ctx.resume().catch(() => {});
+      }
+    };
+    ctx.addEventListener('statechange', resumeIfActive);
+    document.addEventListener('visibilitychange', resumeIfActive);
 
     this.master = ctx.createGain();
     this.master.gain.value = this.muted ? 0 : this.volume;
@@ -96,6 +107,8 @@ export class AudioEngine {
     const bg = this.background;
     this.background = 'none';
     this.setBackground(bg);
+
+    if (ctx.state !== 'running') await ctx.resume().catch(() => {});
   }
 
   get isReady() {
@@ -214,7 +227,9 @@ export class AudioEngine {
     const gen = ++this.generation;
     setTimeout(() => {
       // Om ett nytt pass hunnit starta ska vi inte pausa.
-      if (gen === this.generation && ctx.state === 'running') ctx.suspend();
+      if (gen !== this.generation) return;
+      if (ctx.state === 'running') ctx.suspend();
+      silentAudio?.pause();
     }, 2200);
   }
 
@@ -438,6 +453,56 @@ export class AudioEngine {
       }
     }
     return buf;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// iOS: Web Audio tystas av ljudlös-knappen på sidan av telefonen. Två knep gör
+// att ljudet behandlas som "media" (som musik/video) och spelas ändå:
+//  1. navigator.audioSession.type = 'playback' (Safari 17+)
+//  2. en tyst, loopande <audio> som startas i samma klick (äldre iOS)
+
+let silentAudio: HTMLAudioElement | null = null;
+
+function silentWavUrl(): string {
+  // 0,5 s tyst 8 kHz mono 8-bit WAV.
+  const samples = 4000;
+  const buf = new ArrayBuffer(44 + samples);
+  const v = new DataView(buf);
+  const str = (o: number, t: string) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF');
+  v.setUint32(4, 36 + samples, true);
+  str(8, 'WAVEfmt ');
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);
+  v.setUint32(24, 8000, true);
+  v.setUint32(28, 8000, true);
+  v.setUint16(32, 1, true);
+  v.setUint16(34, 8, true);
+  str(36, 'data');
+  v.setUint32(40, samples, true);
+  for (let i = 0; i < samples; i++) v.setUint8(44 + i, 128);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
+function unlockIOSPlayback() {
+  const nav = navigator as Navigator & { audioSession?: { type: string } };
+  try {
+    if (nav.audioSession) nav.audioSession.type = 'playback';
+  } catch {
+    /* stöds inte */
+  }
+  try {
+    if (!silentAudio) {
+      silentAudio = new Audio(silentWavUrl());
+      silentAudio.loop = true;
+      silentAudio.setAttribute('playsinline', '');
+      silentAudio.setAttribute('webkit-playsinline', '');
+    }
+    silentAudio.play().catch(() => {});
+  } catch {
+    /* ignorera */
   }
 }
 
